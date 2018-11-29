@@ -53,6 +53,7 @@ before_install:
   - |
     if [[ "$VULKAN_BUILD_TARGET" == "MACOS" ]]; then
       # We need to upgrade to a newer python
+      brew remove oclint
       brew upgrade python3
     fi
   - |
