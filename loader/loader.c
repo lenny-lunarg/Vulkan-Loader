@@ -1555,7 +1555,7 @@ VkResult loaderAddLayerPropertiesToList(const struct loader_instance *inst, stru
 // output layer_list.  Don't add duplicates to the output layer_list.
 static VkResult loaderAddLayerNamesToList(const struct loader_instance *inst, struct loader_layer_list *output_list,
                                           struct loader_layer_list *expanded_output_list, uint32_t name_count,
-                                          const char *const *names, const struct loader_layer_list *source_list) {
+                                          const char *const *names, const struct loader_layer_list *source_list, bool log_layers) {
     struct loader_layer_properties *layer_prop;
     VkResult err = VK_SUCCESS;
 
@@ -1566,6 +1566,10 @@ static VkResult loaderAddLayerNamesToList(const struct loader_instance *inst, st
             loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0, "loaderAddLayerNamesToList: Unable to find layer %s", source_name);
             err = VK_ERROR_LAYER_NOT_PRESENT;
             continue;
+        }
+
+        if (log_layers) {
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Enabling layer '%s' via application input", source_name);
         }
 
         // If not a meta-layer, simply add it.
@@ -5012,7 +5016,7 @@ static void loaderAddImplicitLayers(const struct loader_instance *inst, struct l
 // search_list then add it to layer_list.  But only add it to layer_list if type_flags matches.
 static void loaderAddEnvironmentLayers(struct loader_instance *inst, const enum layer_type_flags type_flags, const char *env_name,
                                        struct loader_layer_list *target_list, struct loader_layer_list *expanded_target_list,
-                                       const struct loader_layer_list *source_list) {
+                                       const struct loader_layer_list *source_list, bool log_layers) {
     char *next, *name;
     char *layer_env = loader_secure_getenv(env_name, inst);
     if (layer_env == NULL) {
@@ -5026,6 +5030,10 @@ static void loaderAddEnvironmentLayers(struct loader_instance *inst, const enum 
 
     while (name && *name) {
         next = loader_get_next_path(name);
+        if (log_layers) {
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0,
+                "Enabling layer '%s' via environment variable '%s'", name, env_name);
+        }
         loaderAddLayerNameToList(inst, name, type_flags, source_list, target_list, expanded_target_list);
         name = next;
     }
@@ -5068,11 +5076,11 @@ VkResult loaderEnableInstanceLayers(struct loader_instance *inst, const VkInstan
     if (!inst->override_layer_present) {
         // Add any layers specified via environment variable next
         loaderAddEnvironmentLayers(inst, VK_LAYER_TYPE_FLAG_EXPLICIT_LAYER, "VK_INSTANCE_LAYERS", &inst->app_activated_layer_list,
-                                   &inst->expanded_activated_layer_list, instance_layers);
+                                   &inst->expanded_activated_layer_list, instance_layers, true);
 
         // Add layers specified by the application
         err = loaderAddLayerNamesToList(inst, &inst->app_activated_layer_list, &inst->expanded_activated_layer_list,
-                                        pCreateInfo->enabledLayerCount, pCreateInfo->ppEnabledLayerNames, instance_layers);
+                                        pCreateInfo->enabledLayerCount, pCreateInfo->ppEnabledLayerNames, instance_layers, true);
     } else {
         loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0,
                    "loaderEnableInstanceLayers: Override layer is active, disabling all non-included layers");
@@ -5512,9 +5520,9 @@ VkResult loader_validate_instance_extensions(struct loader_instance *inst, const
     // Build the lists of active layers (including metalayers) and expanded layers (with metalayers resolved to their components)
     loaderAddImplicitLayers(inst, &active_layers, &expanded_layers, instance_layers);
     loaderAddEnvironmentLayers(inst, VK_LAYER_TYPE_FLAG_EXPLICIT_LAYER, ENABLED_LAYERS_ENV, &active_layers, &expanded_layers,
-                               instance_layers);
+                               instance_layers, false);
     res = loaderAddLayerNamesToList(inst, &active_layers, &expanded_layers, pCreateInfo->enabledLayerCount,
-                                    pCreateInfo->ppEnabledLayerNames, instance_layers);
+                                    pCreateInfo->ppEnabledLayerNames, instance_layers, false);
     if (VK_SUCCESS != res) {
         goto out;
     }
