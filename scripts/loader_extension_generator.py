@@ -84,6 +84,7 @@ PRE_INSTANCE_FUNCTIONS = ['vkEnumerateInstanceExtensionProperties',
 # LoaderExtensionGeneratorOptions - subclass of GeneratorOptions.
 class LoaderExtensionGeneratorOptions(GeneratorOptions):
     def __init__(self,
+                 conventions = None,
                  filename = None,
                  directory = '.',
                  apiname = None,
@@ -106,7 +107,7 @@ class LoaderExtensionGeneratorOptions(GeneratorOptions):
                  indentFuncPointer = False,
                  alignFuncParam = 0,
                  expandEnumerants = True):
-        GeneratorOptions.__init__(self, filename, directory, apiname, profile,
+        GeneratorOptions.__init__(self, conventions, filename, directory, apiname, profile,
                                   versions, emitversions, defaultExtensions,
                                   addExtensions, removeExtensions, emitExtensions, sortProcedure)
         self.prefixText      = prefixText
