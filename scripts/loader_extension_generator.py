@@ -60,7 +60,8 @@ DEVICE_CMDS_NEED_TERM = ['vkGetDeviceProcAddr',
                          'vkDebugMarkerSetObjectTagEXT',
                          'vkDebugMarkerSetObjectNameEXT',
                          'vkSetDebugUtilsObjectNameEXT',
-                         'vkSetDebugUtilsObjectTagEXT']
+                         'vkSetDebugUtilsObjectTagEXT',
+                         'vkGetDeviceGroupSurfacePresentModes2EXT']
 
 ALIASED_CMDS = {
     'vkEnumeratePhysicalDeviceGroupsKHR':                   'vkEnumeratePhysicalDeviceGroups',
@@ -135,7 +136,7 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
         self.core_commands = []               # List of CommandData records for core Vulkan commands
         self.ext_commands = []                # List of CommandData records for extension Vulkan commands
         self.CommandParam = namedtuple('CommandParam', ['type', 'name', 'cdecl'])
-        self.CommandData = namedtuple('CommandData', ['name', 'ext_name', 'ext_type', 'protect', 'return_type', 'handle_type', 'params', 'cdecl'])
+        self.CommandData = namedtuple('CommandData', ['name', 'ext_name', 'ext_type', 'require', 'protect', 'return_type', 'handle_type', 'params', 'cdecl'])
         self.instanceExtensions = []
         self.ExtensionData = namedtuple('ExtensionData', ['name', 'type', 'protect', 'define', 'num_commands'])
 
@@ -307,6 +308,12 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
         if (return_type is not None and return_type.text == 'void'):
            return_type = None
 
+        require = None
+        if name == 'vkGetDeviceGroupSurfacePresentModes2EXT':
+            require_node = self.registry.tree.find("./extensions/extension[@name='{}']/require/command[@name='{}']/..".format(extension_name, name))
+            if 'extension' in require_node.attrib:
+                require = require_node.attrib['extension']
+
         cmd_params = []
 
         # Generate a list of commands for use in printing the necessary
@@ -333,6 +340,7 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
                 self.core_commands.append(
                     self.CommandData(name=name, ext_name=extension_name,
                                      ext_type='device',
+                                     require=require,
                                      protect=self.featureExtraProtect,
                                      return_type = return_type,
                                      handle_type = handle_type,
@@ -343,6 +351,7 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
                 self.ext_commands.append(
                     self.CommandData(name=name, ext_name=extension_name,
                                      ext_type=extension_type,
+                                     require=require,
                                      protect=self.featureExtraProtect,
                                      return_type = return_type,
                                      handle_type = handle_type,
@@ -355,6 +364,7 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
                 self.core_commands.append(
                     self.CommandData(name=name, ext_name=extension_name,
                                      ext_type='instance',
+                                     require=require,
                                      protect=self.featureExtraProtect,
                                      return_type = return_type,
                                      handle_type = handle_type,
@@ -366,6 +376,7 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
                 self.ext_commands.append(
                     self.CommandData(name=name, ext_name=extension_name,
                                      ext_type=extension_type,
+                                     require=require,
                                      protect=self.featureExtraProtect,
                                      return_type = return_type,
                                      handle_type = handle_type,
@@ -1443,7 +1454,10 @@ class LoaderExtensionOutputGenerator(OutputGenerator):
                         term_func += '\n    // ---- Core %s commands\n' % ext_cmd.ext_name[11:]
                     else:
                         term_func += '\n    // ---- %s extension commands\n' % ext_cmd.ext_name
-                        term_func += '    if (dev->extensions.%s_enabled) {\n' % ext_cmd.ext_name[3:].lower()
+                        if ext_cmd.require:
+                            term_func += '    if (dev->extensions.%s_enabled && dev->extensions.%s_enabled) {\n' % (ext_cmd.ext_name[3:].lower(), ext_cmd.require[3:].lower())
+                        else:
+                            term_func += '    if (dev->extensions.%s_enabled) {\n' % ext_cmd.ext_name[3:].lower()
                         is_extension = True
                     cur_extension_name = ext_cmd.ext_name
 
