@@ -360,12 +360,15 @@ LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceVersion(uint32_t
     return res;
 }
 
+#include "manifest.h"
 LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkCreateInstance(const VkInstanceCreateInfo *pCreateInfo,
                                                               const VkAllocationCallbacks *pAllocator, VkInstance *pInstance) {
     struct loader_instance *ptr_instance = NULL;
     VkInstance created_instance = VK_NULL_HANDLE;
     bool loaderLocked = false;
     VkResult res = VK_ERROR_INITIALIZATION_FAILED;
+
+    CppTest();
 
     LOADER_PLATFORM_THREAD_ONCE(&once_init, loader_initialize);
 

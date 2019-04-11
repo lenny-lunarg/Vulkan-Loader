@@ -85,6 +85,7 @@ if(WIN32)
     endif()
 
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_CRT_SECURE_NO_WARNINGS")
+    add_definitions(-D_CRT_SECURE_NO_WARNINGS)
     # ~~~
     # Build dev_ext_trampoline.c with -O2 to allow tail-call optimization.
     # Build other C files with normal options.
@@ -194,6 +195,9 @@ if(WIN32)
     target_compile_options(loader-opt PUBLIC ${MSVC_LOADER_COMPILE_OPTIONS})
     target_include_directories(loader-opt PRIVATE "$<TARGET_PROPERTY:Vulkan::Headers,INTERFACE_INCLUDE_DIRECTORIES>")
 
+    add_library(loader-cpp OBJECT manifest.cpp manifest.h sys_path.cpp sys_path.hpp)
+    target_include_directories(loader-cpp PRIVATE "$<TARGET_PROPERTY:Vulkan::Headers,INTERFACE_INCLUDE_DIRECTORIES>")
+
     if(NOT ENABLE_STATIC_LOADER)
         target_compile_definitions(loader-norm PUBLIC LOADER_DYNAMIC_LIB)
         target_compile_definitions(loader-opt PUBLIC LOADER_DYNAMIC_LIB)
@@ -202,6 +206,7 @@ if(WIN32)
                     SHARED
                     $<TARGET_OBJECTS:loader-opt>
                     $<TARGET_OBJECTS:loader-norm>
+                    $<TARGET_OBJECTS:loader-cpp>
                     $<TARGET_OBJECTS:loader-unknown-chain>
                     ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-1.def
                     ${CMAKE_CURRENT_SOURCE_DIR}/loader.rc)
