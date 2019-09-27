@@ -1,0 +1,16 @@
+
+## Vulkan Loader
+
+The Vulkan loader is a software library that is responsible for managing the layers and drivers within the Vulkan API.
+
+The Vulkan loader is a required component of a Vulkan implementation.
+A complete Vulkan implementation consists of a single Vulkan loader and one or more Vulkan drivers.
+
+
+
+### Further Documentation
+link:distribustion.adoc[**Distributing the loader**] -- Infomation on how the loader should be distributed
+link:platforms.adoc[**Supported platforms**] -- Information on the different platforms 
+
+
+link:LoaderAndLayerInterface.md[**Legacy documentation**] -- ???
