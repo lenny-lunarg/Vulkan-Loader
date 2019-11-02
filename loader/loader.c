@@ -70,8 +70,12 @@
 #include <initguid.h>
 #include <devpkey.h>
 #include <winternl.h>
+#include <strsafe.h>
+#include <dxgi1_6.h>
 #include "adapters.h"
-#include "dxgi_loader.h"
+
+typedef HRESULT (APIENTRY *PFN_CreateDXGIFactory1)(REFIID riid, void **ppFactory);
+static PFN_CreateDXGIFactory1 fpCreateDXGIFactory1;
 #endif
 
 // This is a CMake generated file with #defines for any functions/includes
@@ -870,7 +874,7 @@ VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *locati
     }
 
     if (is_driver) {
-        HRESULT hres = dyn_CreateDXGIFactory1(&IID_IDXGIFactory1, &dxgi_factory);
+        HRESULT hres = fpCreateDXGIFactory1(&IID_IDXGIFactory1, &dxgi_factory);
         if (hres != S_OK) {
             loader_log(
                 inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0,
@@ -2440,6 +2444,13 @@ void loader_initialize(void) {
     // This is needed to ensure that newer APIs are available right away
     // and not after the first call that has been statically linked
     LoadLibrary("gdi32.dll");
+
+    TCHAR systemPath[MAX_PATH] = "";
+    GetSystemDirectory(systemPath, MAX_PATH);
+    StringCchCat(systemPath, MAX_PATH, TEXT("\\dxgi.dll"));
+    HMODULE dxgi_module = LoadLibrary(systemPath);
+    fpCreateDXGIFactory1 = dxgi_module == NULL ? NULL :
+        (PFN_CreateDXGIFactory1)GetProcAddress(dxgi_module, "CreateDXGIFactory1");
 #endif
 }
 
