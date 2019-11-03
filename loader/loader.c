@@ -2196,7 +2196,7 @@ bool loader_get_icd_interface_version(PFN_vkNegotiateLoaderICDInterfaceVersion f
     } else {
         // ICD supports the negotiation API, so call it with the loader's
         // latest version supported
-        *pVersion = CURRENT_LOADER_ICD_INTERFACE_VERSION;
+        *pVersion = 6;//TODO: Bump the current version in vk_icd.h and restore this: CURRENT_LOADER_ICD_INTERFACE_VERSION;
         VkResult result = fp_negotiate_icd_version(pVersion);
 
         if (result == VK_ERROR_INCOMPATIBLE_DRIVER) {
@@ -2251,6 +2251,7 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
     PFN_vkGetInstanceProcAddr fp_get_proc_addr;
     PFN_GetPhysicalDeviceProcAddr fp_get_phys_dev_proc_addr = NULL;
     PFN_vkNegotiateLoaderICDInterfaceVersion fp_negotiate_icd_version;
+    PFN_EnumerateDXGIAdapterPhysicalDevices fp_enum_dxgi_adapter_phys_devs = NULL;
     struct loader_scanned_icd *new_scanned_icd;
     uint32_t interface_vers;
     VkResult res = VK_SUCCESS;
@@ -2337,6 +2338,9 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
             goto out;
         }
         fp_get_phys_dev_proc_addr = loader_platform_get_proc_address(handle, "vk_icdGetPhysicalDeviceProcAddr");
+        if (interface_vers >= 6) {
+            fp_enum_dxgi_adapter_phys_devs = loader_platform_get_proc_address(handle, "vk_icdEnumerateDXGIAdapterPhysicalDevices");
+        }
     }
 
     // check for enough capacity
@@ -2362,6 +2366,7 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
     new_scanned_icd->GetPhysicalDeviceProcAddr = fp_get_phys_dev_proc_addr;
     new_scanned_icd->EnumerateInstanceExtensionProperties = fp_get_inst_ext_props;
     new_scanned_icd->CreateInstance = fp_create_inst;
+    new_scanned_icd->EnumerateDXGIAdapterPhysicalDevices = fp_enum_dxgi_adapter_phys_devs;
     new_scanned_icd->interface_version = interface_vers;
 
     new_scanned_icd->lib_name = (char *)loader_instance_heap_alloc(inst, strlen(filename) + 1, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
@@ -6803,6 +6808,14 @@ VkResult setupLoaderTermPhysDevs(struct loader_instance *inst) {
     struct loader_icd_term *icd_term;
     struct loader_phys_dev_per_icd *icd_phys_dev_array = NULL;
     struct loader_physical_device_term **new_phys_devs = NULL;
+    struct {
+        uint32_t device_count;
+        VkPhysicalDevice *physical_devices;
+        uint32_t icd_index;
+        struct loader_icd_term *icd_term;
+    } *sorted_phys_dev_array = NULL;
+    uint32_t sorted_count = 0;
+    uint32_t sorted_alloc = 0;
 
     inst->total_gpu_count = 0;
 
@@ -6819,11 +6832,100 @@ VkResult setupLoaderTermPhysDevs(struct loader_instance *inst) {
         goto out;
     }
     memset(icd_phys_dev_array, 0, sizeof(struct loader_phys_dev_per_icd) * inst->total_icd_count);
-    icd_term = inst->icd_terms;
+
+#if defined(_WIN32)
+    IDXGIFactory6 *dxgi_factory = NULL;
+    HRESULT hres = fpCreateDXGIFactory1(&IID_IDXGIFactory6, &dxgi_factory);
+    if (hres != S_OK) {
+        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Failed to create DXGI factory 6. Physical devices will not be sorted");
+    } else {
+        sorted_alloc = 16;
+        sorted_phys_dev_array = loader_instance_heap_alloc(inst, sorted_alloc * sizeof(*sorted_phys_dev_array), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+        if (sorted_phys_dev_array == NULL) {
+            res = VK_ERROR_OUT_OF_HOST_MEMORY;
+            goto out;
+        }
+
+        for (uint32_t i = 0; ; ++i) {
+            IDXGIAdapter1 *adapter;
+            hres = dxgi_factory->lpVtbl->EnumAdapterByGpuPreference(dxgi_factory, i, DXGI_GPU_PREFERENCE_UNSPECIFIED, &IID_IDXGIAdapter1, &adapter);
+            if (hres == DXGI_ERROR_NOT_FOUND) {
+                break; // No more adapters
+            } else if (hres != S_OK) {
+                loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0, "Failed to enumerate adapters by GPU preference at index %u. This adapter will not be sorted", i);
+                break;
+            }
+
+            if (sorted_alloc <= i) {
+                uint32_t old_size = sorted_alloc * sizeof(*sorted_phys_dev_array);
+                sorted_phys_dev_array = loader_instance_heap_realloc(inst, sorted_phys_dev_array, old_size, 2*old_size, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+                if (sorted_phys_dev_array == NULL) {
+                    adapter->lpVtbl->Release(adapter);
+                    res = VK_ERROR_OUT_OF_HOST_MEMORY;
+                    goto out;
+                }
+                sorted_alloc *= 2;
+            }
+            sorted_phys_dev_array[i].device_count = 0;
+            sorted_phys_dev_array[i].physical_devices = NULL;
+
+            icd_term = inst->icd_terms;
+            for (uint32_t icd_idx = 0; NULL != icd_term; icd_term = icd_term->next, icd_idx++) {
+                // This is the new behavior, which cannot be run unless the ICD provides EnumerateAdapterPhysicalDevices
+                if (icd_term->scanned_icd->EnumerateDXGIAdapterPhysicalDevices == NULL) {
+                    continue;
+                }
+                icd_phys_dev_array[icd_idx].count = 0;
+
+                uint32_t count;
+                VkResult vkres = icd_term->scanned_icd->EnumerateDXGIAdapterPhysicalDevices(adapter, &count, NULL);
+                if (vkres == VK_ERROR_INCOMPATIBLE_DRIVER) {
+                    continue; // This driver doesn't support the adapter
+                } else if (vkres != VK_SUCCESS) {
+                    loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0, "Failed to convert DXGI adapter into Vulkan physical device with unexpected error code");
+                    continue;
+                }
+
+                // Get the actual physical devices
+                do {
+                    sorted_phys_dev_array[i].physical_devices = loader_instance_heap_realloc(inst, sorted_phys_dev_array[i].physical_devices, sorted_phys_dev_array[i].device_count * sizeof(VkPhysicalDevice), count * sizeof(VkPhysicalDevice), VK_SYSTEM_ALLOCATION_SCOPE_COMMAND);
+                    if (sorted_phys_dev_array[i].physical_devices == NULL) {
+                        res = VK_ERROR_OUT_OF_HOST_MEMORY;
+                        break;
+                    }
+                    sorted_phys_dev_array[i].device_count = count;
+                } while(vkres = icd_term->scanned_icd->EnumerateDXGIAdapterPhysicalDevices(adapter, &count, sorted_phys_dev_array[i].physical_devices) == VK_INCOMPLETE);
+
+                if (vkres != VK_SUCCESS) {
+                    loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0, "Failed to convert DXGI adapter into Vulkan physical device");
+                    continue;
+                } else if (res == VK_ERROR_OUT_OF_HOST_MEMORY) {
+                    goto out;
+                }
+                inst->total_gpu_count += (sorted_phys_dev_array[i].device_count = count);
+                sorted_phys_dev_array[i].icd_index = icd_idx;
+                sorted_phys_dev_array[i].icd_term = icd_term;
+            }
+
+            adapter->lpVtbl->Release(adapter);
+        }
+
+        dxgi_factory->lpVtbl->Release(dxgi_factory);
+    }
+#endif
 
     // For each ICD, query the number of physical devices, and then get an
     // internal value for those physical devices.
+    icd_term = inst->icd_terms;
     for (uint32_t icd_idx = 0; NULL != icd_term; icd_term = icd_term->next, icd_idx++) {
+        // This is the legacy behavior which should be skipped if EnumerateAdapterPhysicalDevices is available
+        if (icd_term->scanned_icd->EnumerateDXGIAdapterPhysicalDevices != NULL) {
+            icd_phys_dev_array[icd_idx].count = 0;
+            icd_phys_dev_array[icd_idx].phys_devs = NULL;
+            icd_phys_dev_array[icd_idx].this_icd_term = NULL;
+            continue;
+        }
+
         res = icd_term->dispatch.EnumeratePhysicalDevices(icd_term->instance, &icd_phys_dev_array[icd_idx].count, NULL);
         if (VK_SUCCESS != res) {
             loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
@@ -6876,6 +6978,49 @@ VkResult setupLoaderTermPhysDevs(struct loader_instance *inst) {
 
     // Copy or create everything to fill the new array of physical devices
     uint32_t idx = 0;
+
+#if defined(_WIN32)
+    // Copy over everything found through sorted enumeration
+    for (uint32_t i = 0; i < sorted_count; ++i) {
+        for (uint32_t j = 0; j < sorted_phys_dev_array[i].device_count; ++i) {
+
+            // Check if this physical device is already in the old buffer
+            if (NULL != inst->phys_devs_term) {
+                for (uint32_t old_idx = 0; old_idx < inst->phys_dev_count_term; old_idx++) {
+                    if (sorted_phys_dev_array[i].physical_devices[j] == inst->phys_devs_term[old_idx]->phys_dev) {
+                        new_phys_devs[idx] = inst->phys_devs_term[old_idx];
+                        break;
+                    }
+                }
+            }
+
+            // If this physical device isn't in the old buffer, then we need to create it.
+            if (NULL == new_phys_devs[idx]) {
+                new_phys_devs[idx] = loader_instance_heap_alloc(inst, sizeof(struct loader_physical_device_term),
+                    VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+                if (NULL == new_phys_devs[idx]) {
+                    loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
+                        "setupLoaderTermPhysDevs:  Failed to allocate "
+                        "physical device terminator object %d",
+                        idx);
+                    inst->total_gpu_count = idx;
+                    res = VK_ERROR_OUT_OF_HOST_MEMORY;
+                    goto out;
+                }
+
+                loader_set_dispatch((void *)new_phys_devs[idx], inst->disp);
+                new_phys_devs[idx]->this_icd_term = sorted_phys_dev_array[i].icd_term;
+                new_phys_devs[idx]->icd_index = (uint8_t)(sorted_phys_dev_array[i].icd_index);
+                new_phys_devs[idx]->phys_dev = sorted_phys_dev_array[i].physical_devices[j];
+            }
+
+            // Increment the count of new physical devices
+            idx++;
+        }
+    }
+#endif
+
+    // Copy over everything found through EnumeratePhysicalDevices
     for (uint32_t icd_idx = 0; icd_idx < inst->total_icd_count; icd_idx++) {
         for (uint32_t pd_idx = 0; pd_idx < icd_phys_dev_array[icd_idx].count; pd_idx++) {
             // Check if this physical device is already in the old buffer
@@ -6945,6 +7090,15 @@ out:
         // Swap out old and new devices list
         inst->phys_dev_count_term = inst->total_gpu_count;
         inst->phys_devs_term = new_phys_devs;
+    }
+
+    if (sorted_phys_dev_array != NULL) {
+        for (uint32_t i = 0; i < sorted_count; ++i) {
+            if (sorted_phys_dev_array[i].device_count > 0 && sorted_phys_dev_array[i].physical_devices != NULL) {
+                loader_instance_heap_free(inst, sorted_phys_dev_array[i].physical_devices);
+            }
+        }
+        loader_instance_heap_free(inst, sorted_phys_dev_array);
     }
 
     return res;
