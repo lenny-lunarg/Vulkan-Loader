@@ -233,3 +233,6 @@ EXPORTS
    vkGetBufferOpaqueCaptureAddress
    vkGetDeviceMemoryOpaqueCaptureAddress
    vkResetQueryPool
+   
+   vkGetPhysicalDeviceSurfaceCapabilities2KHR
+   vkGetPhysicalDeviceSurfaceFormats2KHR
