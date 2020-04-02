@@ -21,11 +21,14 @@ matrix:
       env: VULKAN_BUILD_TARGET=LINUX
     # Linux GN debug build
     - os: linux
-      env: VULKAN_BUILD_TARGET=GN
+      env: VULKAN_BUILD_TARGET=LINUX_GN
     # MacOS clang debug build.
     - os: osx
       compiler: clang
       env: VULKAN_BUILD_TARGET=MACOS
+    - os: osx
+      compiler: clang
+      env: VULKAN_BUILD_TARGET=MACOS_GN
     # Check for proper clang formatting in the pull request.
     - env: CHECK_FORMAT=ON
     # Check for proper commit message formatting for commits in PR
@@ -60,7 +63,7 @@ before_install:
         UPDATE_DEPS_EXTRA_OPTIONS="--ref=master"
     fi
   - |
-    if [[ "$VULKAN_BUILD_TARGET" == "LINUX" ]] || [[ "$VULKAN_BUILD_TARGET" == "GN" ]]; then
+    if [[ "$VULKAN_BUILD_TARGET" == "LINUX" ]] || [[ "$VULKAN_BUILD_TARGET" == "LINUX_GN" ]]; then
       # Install the appropriate Linux packages.
       sudo apt-get -qq update
       sudo apt-get -y install libxkbcommon-dev libwayland-dev libxrandr-dev libx11-xcb-dev \
@@ -103,7 +106,7 @@ script:
       cd ..
     fi
   - |
-    if [[ "$VULKAN_BUILD_TARGET" == "GN" ]]; then
+    if [[ "$VULKAN_BUILD_TARGET" == "LINUX_GN" ]] || [[ "$VULKAN_BUILD_TARGET" == "MACOS_GN" ]]; then
       git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git depot_tools
       export PATH=$PATH:$PWD/depot_tools
       ./build-gn/update_deps.sh
