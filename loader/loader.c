@@ -2251,7 +2251,9 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
     PFN_vkGetInstanceProcAddr fp_get_proc_addr;
     PFN_GetPhysicalDeviceProcAddr fp_get_phys_dev_proc_addr = NULL;
     PFN_vkNegotiateLoaderICDInterfaceVersion fp_negotiate_icd_version;
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
     PFN_vk_icdEnumerateAdapterPhysicalDevices fp_enum_dxgi_adapter_phys_devs = NULL;
+#endif
     struct loader_scanned_icd *new_scanned_icd;
     uint32_t interface_vers;
     VkResult res = VK_SUCCESS;
@@ -2338,9 +2340,11 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
             goto out;
         }
         fp_get_phys_dev_proc_addr = loader_platform_get_proc_address(handle, "vk_icdGetPhysicalDeviceProcAddr");
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
         if (interface_vers >= 6) {
             fp_enum_dxgi_adapter_phys_devs = loader_platform_get_proc_address(handle, "vk_icdEnumerateAdapterPhysicalDevices");
         }
+#endif
     }
 
     // check for enough capacity
@@ -2366,7 +2370,9 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
     new_scanned_icd->GetPhysicalDeviceProcAddr = fp_get_phys_dev_proc_addr;
     new_scanned_icd->EnumerateInstanceExtensionProperties = fp_get_inst_ext_props;
     new_scanned_icd->CreateInstance = fp_create_inst;
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
     new_scanned_icd->EnumerateAdapterPhysicalDevices = fp_enum_dxgi_adapter_phys_devs;
+#endif
     new_scanned_icd->interface_version = interface_vers;
 
     new_scanned_icd->lib_name = (char *)loader_instance_heap_alloc(inst, strlen(filename) + 1, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
@@ -6920,9 +6926,11 @@ VkResult setupLoaderTermPhysDevs(struct loader_instance *inst) {
         icd_phys_dev_array[icd_idx].this_icd_term = NULL;
 
         // This is the legacy behavior which should be skipped if EnumerateAdapterPhysicalDevices is available
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
         if (icd_term->scanned_icd->EnumerateAdapterPhysicalDevices != NULL) {
             continue;
         }
+#endif
 
         res = icd_term->dispatch.EnumeratePhysicalDevices(icd_term->instance, &icd_phys_dev_array[icd_idx].count, NULL);
         if (VK_SUCCESS != res) {
@@ -7696,7 +7704,11 @@ VkResult setupLoaderTermPhysDevGroups(struct loader_instance *inst) {
 
         local_phys_dev_groups[icd_idx].physicalDeviceCount = 0;
         // Check if this group can be sorted
+#if defined(VK_USE_PLATFORM_WIN32_KHR)
         local_phys_dev_group_sorted[icd_idx] = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices != NULL;
+#else
+        local_phys_dev_group_sorted[icd_idx] = false;
+#endif
 
         // Get the function pointer to use to call into the ICD. This could be the core or KHR version
         if (inst->enabled_known_extensions.khr_device_group_creation) {
