@@ -2196,7 +2196,7 @@ bool loader_get_icd_interface_version(PFN_vkNegotiateLoaderICDInterfaceVersion f
     } else {
         // ICD supports the negotiation API, so call it with the loader's
         // latest version supported
-        *pVersion = 6;
+        *pVersion = CURRENT_LOADER_ICD_INTERFACE_VERSION;
         VkResult result = fp_negotiate_icd_version(pVersion);
 
         if (result == VK_ERROR_INCOMPATIBLE_DRIVER) {
@@ -2251,7 +2251,7 @@ static VkResult loader_scanned_icd_add(const struct loader_instance *inst, struc
     PFN_vkGetInstanceProcAddr fp_get_proc_addr;
     PFN_GetPhysicalDeviceProcAddr fp_get_phys_dev_proc_addr = NULL;
     PFN_vkNegotiateLoaderICDInterfaceVersion fp_negotiate_icd_version;
-    PFN_EnumerateAdapterPhysicalDevices fp_enum_dxgi_adapter_phys_devs = NULL;
+    PFN_vk_icdEnumerateAdapterPhysicalDevices fp_enum_dxgi_adapter_phys_devs = NULL;
     struct loader_scanned_icd *new_scanned_icd;
     uint32_t interface_vers;
     VkResult res = VK_SUCCESS;
@@ -6836,7 +6836,7 @@ VkResult ReadSortedPhysicalDevices(struct loader_instance *inst, struct LoaderSo
                 }
 
                 uint32_t count;
-                VkResult vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(description.AdapterLuid, &count, NULL);
+                VkResult vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(inst->instance, description.AdapterLuid, &count, NULL);
                 if (vkres == VK_ERROR_INCOMPATIBLE_DRIVER) {
                     continue; // This driver doesn't support the adapter
                 }
@@ -6853,7 +6853,7 @@ VkResult ReadSortedPhysicalDevices(struct loader_instance *inst, struct LoaderSo
                         break;
                     }
                     sorted_array[*sorted_count].device_count = count;
-                } while (vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(description.AdapterLuid, &count, sorted_array[*sorted_count].physical_devices) == VK_INCOMPLETE);
+                } while (vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(inst->instance, description.AdapterLuid, &count, sorted_array[*sorted_count].physical_devices) == VK_INCOMPLETE);
 
                 if (vkres != VK_SUCCESS) {
                     loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0, "Failed to convert DXGI adapter into Vulkan physical device");

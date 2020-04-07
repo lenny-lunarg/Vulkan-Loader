@@ -81,9 +81,6 @@ static const char UTF8_THREE_BYTE_MASK = 0xF8;
 static const char UTF8_DATA_BYTE_CODE = 0x80;
 static const char UTF8_DATA_BYTE_MASK = 0xC0;
 
-//typedef  VkResult(VKAPI_PTR *PFN_EnumerateAdapterPhysicalDevices)(LUID deviceLUID, uint32_t* pPhysicalDeviceCount, VkPhysicalDevice* pPhysicalDevices);
-typedef  VkResult(VKAPI_PTR* PFN_EnumerateAdapterPhysicalDevices)();
-
 // form of all dynamic lists/arrays
 // only the list element should be changed
 struct loader_generic_list {
@@ -385,7 +382,7 @@ struct loader_scanned_icd {
     PFN_GetPhysicalDeviceProcAddr GetPhysicalDeviceProcAddr;
     PFN_vkCreateInstance CreateInstance;
     PFN_vkEnumerateInstanceExtensionProperties EnumerateInstanceExtensionProperties;
-    PFN_EnumerateAdapterPhysicalDevices EnumerateAdapterPhysicalDevices;
+    PFN_vk_icdEnumerateAdapterPhysicalDevices EnumerateAdapterPhysicalDevices;
 };
 
 static inline struct loader_instance *loader_instance(VkInstance instance) { return (struct loader_instance *)instance; }
