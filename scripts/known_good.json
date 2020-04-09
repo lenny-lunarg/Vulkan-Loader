@@ -2,11 +2,11 @@
   "repos" : [
     {
       "name" : "Vulkan-Headers",
-      "url" : "https://github.com/KhronosGroup/Vulkan-Headers.git",
+      "url" : "https://github.com/lenny-lunarg/Vulkan-Headers.git",
       "sub_dir" : "Vulkan-Headers",
       "build_dir" : "Vulkan-Headers/build",
       "install_dir" : "Vulkan-Headers/build/install",
-      "commit" : "v1.2.135"
+      "commit" : "5746fe38f291bfd7dc7d519783785946166dc1fb"
     }
   ],
   "install_names" : {
