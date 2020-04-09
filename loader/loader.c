@@ -6842,7 +6842,7 @@ VkResult ReadSortedPhysicalDevices(struct loader_instance *inst, struct LoaderSo
                 }
 
                 uint32_t count;
-                VkResult vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(inst->instance, description.AdapterLuid, &count, NULL);
+                VkResult vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(icd_term->instance, description.AdapterLuid, &count, NULL);
                 if (vkres == VK_ERROR_INCOMPATIBLE_DRIVER) {
                     continue; // This driver doesn't support the adapter
                 }
@@ -6859,7 +6859,7 @@ VkResult ReadSortedPhysicalDevices(struct loader_instance *inst, struct LoaderSo
                         break;
                     }
                     sorted_array[*sorted_count].device_count = count;
-                } while (vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(inst->instance, description.AdapterLuid, &count, sorted_array[*sorted_count].physical_devices) == VK_INCOMPLETE);
+                } while (vkres = icd_term->scanned_icd->EnumerateAdapterPhysicalDevices(icd_term->instance, description.AdapterLuid, &count, sorted_array[*sorted_count].physical_devices) == VK_INCOMPLETE);
 
                 if (vkres != VK_SUCCESS) {
                     loader_log(inst, VK_DEBUG_REPORT_WARNING_BIT_EXT, 0, "Failed to convert DXGI adapter into Vulkan physical device");
