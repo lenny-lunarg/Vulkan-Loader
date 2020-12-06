@@ -3452,6 +3452,10 @@ static VkResult loaderReadLayerJson(const struct loader_instance *inst, struct l
             props->enable_env_var.name[sizeof(props->enable_env_var.name) - 1] = '\0';
             strncpy(props->enable_env_var.value, enable_environment->child->valuestring, sizeof(props->enable_env_var.value));
             props->enable_env_var.value[sizeof(props->enable_env_var.value) - 1] = '\0';
+        } else if (inst != NULL && inst->safe_mode) {
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Layer \"%s\n\" will not be loaded, as safe mode is enabled.", name);
+            result = VK_SUCCESS;
+            goto out;
         }
     }
 
@@ -4742,6 +4746,10 @@ void loaderScanForLayers(struct loader_instance *inst, struct loader_layer_list 
     loaderDeleteLayerListAndProperties(inst, instance_layers);
 
     loader_platform_thread_lock_mutex(&loader_json_lock);
+
+    if(inst != NULL && loader_getenv("VK_SAFE_MODE_ENABLE", inst)) {
+        inst->safe_mode = true;
+    }
 
     // Get a list of manifest files for any implicit layers
     // Pass NULL for environment variable override - implicit layers are not overridden by LAYERS_PATH_ENV

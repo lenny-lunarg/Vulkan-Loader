@@ -290,6 +290,8 @@ struct loader_instance {
     struct loader_layer_list instance_layer_list;
     bool override_layer_present;
 
+    bool safe_mode;
+
     // List of activated layers.
     //  app_      is the version based on exactly what the application asked for.
     //            This is what must be returned to the application on Enumerate calls.
