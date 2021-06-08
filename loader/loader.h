@@ -130,6 +130,23 @@ struct loader_override_expiration {
     uint8_t minute;
 };
 
+enum loader_manifest_source_type {
+    LOADER_MANIFEST_SOURCE_DIRECTORY,
+    LOADER_MANIFEST_SOURCE_REGISTRY,
+};
+
+struct loader_manifest_source {
+    char* filename;
+    enum loader_manifest_source_type type;
+    char* type_info;
+};
+
+struct loader_data_files {
+    uint32_t count;
+    uint32_t alloc_count;
+    struct loader_manifest_source *source_list;
+};
+
 struct loader_layer_properties {
     VkLayerProperties info;
     enum layer_type_flags type_flags;
@@ -158,6 +175,7 @@ struct loader_layer_properties {
     char (*blacklist_layer_names)[MAX_STRING_SIZE];
     uint32_t num_app_key_paths;
     char (*app_key_paths)[MAX_STRING_SIZE];
+    struct loader_manifest_source source;
 };
 
 struct loader_layer_list {
@@ -495,7 +513,7 @@ void loader_scanned_icd_clear(const struct loader_instance *inst, struct loader_
 VkResult loader_icd_scan(const struct loader_instance *inst, struct loader_icd_tramp_list *icd_tramp_list);
 void loaderScanForLayers(struct loader_instance *inst, struct loader_layer_list *instance_layers);
 void loaderScanForImplicitLayers(struct loader_instance *inst, struct loader_layer_list *instance_layers);
-bool loaderImplicitLayerIsEnabled(const struct loader_instance *inst, const struct loader_layer_properties *prop);
+bool loaderImplicitLayerIsEnabled(const struct loader_instance *inst, const struct loader_layer_properties *prop, bool log);
 VkResult loader_get_icd_loader_instance_extensions(const struct loader_instance *inst, struct loader_icd_tramp_list *icd_tramp_list,
                                                    struct loader_extension_list *inst_exts);
 struct loader_icd_term *loader_get_icd_and_device(const void *device, struct loader_device **found_dev, uint32_t *icd_index);

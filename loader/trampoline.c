@@ -129,7 +129,7 @@ LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceExtensionPropert
 
     // Prepend layers onto the chain if they implement this entry point
     for (uint32_t i = 0; i < layers.count; ++i) {
-        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i) ||
+        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i, false) ||
             layers.list[i].pre_instance_functions.enumerate_instance_extension_properties[0] == '\0') {
             continue;
         }
@@ -223,7 +223,7 @@ LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceLayerProperties(
 
     // Prepend layers onto the chain if they implement this entry point
     for (uint32_t i = 0; i < layers.count; ++i) {
-        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i) ||
+        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i, false) ||
             layers.list[i].pre_instance_functions.enumerate_instance_layer_properties[0] == '\0') {
             continue;
         }
@@ -317,7 +317,7 @@ LOADER_EXPORT VKAPI_ATTR VkResult VKAPI_CALL vkEnumerateInstanceVersion(uint32_t
 
     // Prepend layers onto the chain if they implement this entry point
     for (uint32_t i = 0; i < layers.count; ++i) {
-        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i) ||
+        if (!loaderImplicitLayerIsEnabled(NULL, layers.list + i, false) ||
             layers.list[i].pre_instance_functions.enumerate_instance_version[0] == '\0') {
             continue;
         }
