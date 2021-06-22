@@ -557,6 +557,69 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetDeviceDispatch(VkDevice device, void *object
 
 #if defined(_WIN32)
 
+static VkResult LoaderAddManifestSource(const struct loader_instance *inst, const char* json_paths, DWORD json_paths_size, LPCSTR key_name, DWORD key_type, enum loader_manifest_source_type origin_type, bool remove_same_names, struct loader_data_files* source_data) {
+
+    for (const char *curr_filename = json_paths; curr_filename[0] != '\0'; curr_filename += strlen(curr_filename) + 1) {
+
+        // Check if this full path is already present
+        bool found = false;
+        for (uint32_t i = 0; i < source_data->count; ++i) {
+            if (source_data->source_list[i].filename && strstr(source_data->source_list[i].filename, curr_filename)) {
+                return VK_SUCCESS;
+            }
+        }
+
+        // Generally we only want to strip the path out if the entire path is a duplicate. However, it is possible for the same ICDs
+        // and layers to be found twice, albeit in different registry and file locations. This allows us to do that check only when
+        // usefull, which is when searching the HKLM and HKCU registries
+        if (remove_same_names) {
+            char *pLastSlashName = strrchr(curr_filename, '\\');
+            if (pLastSlashName != NULL) {
+                for (uint32_t i = 0; i < source_data->count; ++i) {
+                    if (strstr(source_data->source_list[i].filename, pLastSlashName + 1)) {
+                        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0,
+                            "Skipping adding of json file \"%s\" to the list of sources because it is already present", curr_filename);
+                        return VK_SUCCESS;
+                    }
+                }
+            }
+        }
+
+        // Check if an allocation is needed and perform it
+        if (source_data->count == source_data->alloc_count) {
+            uint32_t new_count = source_data->alloc_count == 0 ? 8 : source_data->alloc_count*2;;
+            void *new_buffer = loader_instance_heap_realloc(inst, source_data->source_list, source_data->alloc_count * sizeof(*source_data->source_list), new_count * sizeof(*source_data->source_list), VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+            if (new_buffer == NULL) {
+                return VK_ERROR_OUT_OF_HOST_MEMORY;
+            }
+            source_data->alloc_count = new_count;
+            source_data->source_list = new_buffer;
+        }
+
+        // Add the new item(s)
+        void* filename = loader_instance_heap_alloc(inst, strlen(curr_filename) + 1, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+        if (filename == NULL) {
+            return VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+        strcpy(filename, curr_filename);
+
+        source_data->source_list[source_data->count++] = (struct loader_manifest_source) {
+            .filename = filename,
+            .type = origin_type,
+            .type_info = NULL,
+        };
+        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "%s: Located json file \"%s\" from PnP registry: %s", __FUNCTION__,
+            curr_filename, key_name);
+
+        // Exit if this isn't a string list
+        if (key_type == REG_SZ) {
+            break;
+        }
+    }
+
+    return VK_SUCCESS;
+}
+
 // Append the JSON path data to the list and allocate/grow the list if it's not large enough.
 // Function returns true if filename was appended to reg_data list.
 // Caller should free reg_data.
@@ -618,14 +681,14 @@ static bool loaderAddJsonEntry(const struct loader_instance *inst,
 // This function looks for filename in given device handle, filename is then added to return list
 // function return true if filename was appended to reg_data list
 // If error occurs result is updated with failure reason
-bool loaderGetDeviceRegistryEntry(const struct loader_instance *inst, char **reg_data, PDWORD total_size, DEVINST dev_id,
+bool loaderGetDeviceRegistryEntry(const struct loader_instance *inst, struct loader_data_files *source_data, DEVINST dev_id,
                                   LPCSTR value_name, VkResult *result) {
     HKEY hkrKey = INVALID_HANDLE_VALUE;
     DWORD requiredSize, data_type;
     char *manifest_path = NULL;
     bool found = false;
 
-    if (NULL == total_size || NULL == reg_data) {
+    if (NULL == source_data) {
         *result = VK_ERROR_INITIALIZATION_FAILED;
         return false;
     }
@@ -690,7 +753,7 @@ bool loaderGetDeviceRegistryEntry(const struct loader_instance *inst, char **reg
         goto out;
     }
 
-    found = loaderAddJsonEntry(inst, reg_data, total_size, value_name, data_type, manifest_path, requiredSize, result);
+    found = LoaderAddManifestSource(inst, manifest_path, requiredSize, value_name, data_type, LOADER_MANIFEST_SOURCE_REGISTRY, false, source_data);
 
 out:
     if (manifest_path != NULL) {
@@ -711,8 +774,8 @@ out:
 //
 // *reg_data contains a string list of filenames as pointer.
 // When done using the returned string list, the caller should free the pointer.
-VkResult loaderGetDeviceRegistryFiles(const struct loader_instance *inst, char **reg_data, PDWORD reg_data_size,
-                                      LPCSTR value_name) {
+VkResult loaderGetDeviceRegistryFiles(const struct loader_instance *inst, struct loader_data_files *source_data, LPCSTR value_name) {
+
     static const wchar_t *softwareComponentGUID = L"{5c4c3332-344d-483c-8739-259e934c9cc8}";
     static const wchar_t *displayGUID = L"{4d36e968-e325-11ce-bfc1-08002be10318}";
 #ifdef CM_GETIDLIST_FILTER_PRESENT
@@ -730,9 +793,8 @@ VkResult loaderGetDeviceRegistryFiles(const struct loader_instance *inst, char *
     VkResult result = VK_SUCCESS;
     bool found = false;
 
-    if (NULL == reg_data) {
-        result = VK_ERROR_INITIALIZATION_FAILED;
-        return result;
+    if (NULL == source_data) {
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     // if after obtaining the DeviceNameSize, new device is added start over
@@ -777,7 +839,7 @@ VkResult loaderGetDeviceRegistryFiles(const struct loader_instance *inst, char *
 
             loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "loaderGetDeviceRegistryFiles: opening device %ls", deviceName);
 
-            if (loaderGetDeviceRegistryEntry(inst, reg_data, reg_data_size, devID, value_name, &result)) {
+            if (loaderGetDeviceRegistryEntry(inst, source_data, devID, value_name, &result)) {
                 found = true;
                 continue;
             }
@@ -814,7 +876,7 @@ VkResult loaderGetDeviceRegistryFiles(const struct loader_instance *inst, char *
                     continue;
                 }
 
-                if (loaderGetDeviceRegistryEntry(inst, reg_data, reg_data_size, childID, value_name, &result)) {
+                if (loaderGetDeviceRegistryEntry(inst, source_data, childID, value_name, &result)) {
                     found = true;
                     break;  // check next-display-device
                 }
@@ -847,8 +909,8 @@ static char *loader_get_next_path(char *path);
 //
 // *reg_data contains a string list of filenames as pointer.
 // When done using the returned string list, the caller should free the pointer.
-VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *location, bool use_secondary_hive, char **reg_data,
-                                PDWORD reg_data_size) {
+VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *location, bool use_secondary_hive, struct loader_data_files *source_data) {
+
     // This list contains all of the allowed ICDs. This allows us to verify that a device is actually present from the vendor
     // specified. This does disallow other vendors, but any new driver should use the device-specific registries anyway.
     static const struct {
@@ -906,7 +968,7 @@ VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *locati
     IDXGIFactory1 *dxgi_factory = NULL;
     bool is_driver = !strcmp(location, VK_DRIVERS_INFO_REGISTRY_LOC);
 
-    if (NULL == reg_data) {
+    if (NULL == source_data) {
         result = VK_ERROR_INITIALIZATION_FAILED;
         goto out;
     }
@@ -931,31 +993,6 @@ VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *locati
                  (rtn_value = RegEnumValue(key, idx++, name, &name_size, NULL, NULL, (LPBYTE)&value, &value_size)) == ERROR_SUCCESS;
                  name_size = sizeof(name), value_size = sizeof(value)) {
                 if (value_size == sizeof(value) && value == 0) {
-                    if (NULL == *reg_data) {
-                        *reg_data = loader_instance_heap_alloc(inst, *reg_data_size, VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-                        if (NULL == *reg_data) {
-                            loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                                       "loaderGetRegistryFiles: Failed to allocate space for registry data for key %s", name);
-                            RegCloseKey(key);
-                            result = VK_ERROR_OUT_OF_HOST_MEMORY;
-                            goto out;
-                        }
-                        *reg_data[0] = '\0';
-                    } else if (strlen(*reg_data) + name_size + 1 > *reg_data_size) {
-                        void *new_ptr = loader_instance_heap_realloc(inst, *reg_data, *reg_data_size, *reg_data_size * 2,
-                                                                     VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
-                        if (NULL == new_ptr) {
-                            loader_log(
-                                inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
-                                "loaderGetRegistryFiles: Failed to reallocate space for registry value of size %d for key %s",
-                                *reg_data_size * 2, name);
-                            RegCloseKey(key);
-                            result = VK_ERROR_OUT_OF_HOST_MEMORY;
-                            goto out;
-                        }
-                        *reg_data = new_ptr;
-                        *reg_data_size *= 2;
-                    }
 
                     // We've now found a json file. If this is an ICD, we still need to check if there is actually a device
                     // that matches this ICD
@@ -1008,38 +1045,11 @@ VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *locati
                         }
                     }
 
-                    if (strlen(*reg_data) == 0) {
-                        // The list is emtpy. Add the first entry.
-                        (void)snprintf(*reg_data, name_size + 1, "%s", name);
-                        found = true;
-                    } else {
-                        // At this point the reg_data variable contains other JSON paths, likely from the PNP/device section
-                        // of the registry that we want to have precedence over this non-device specific section of the registry.
-                        // To make sure we avoid enumerating old JSON files/drivers that might be present in the non-device specific
-                        // area of the registry when a newer device specific JSON file is present, do a check before adding.
-                        // Find the file name, without path, of the JSON file found in the non-device specific registry location.
-                        // If the same JSON file name is already found in the list, don't add it again.
-                        bool foundDuplicate = false;
-                        char *pLastSlashName = strrchr(name, '\\');
-                        if (pLastSlashName != NULL) {
-                            char *foundMatch = strstr(*reg_data, pLastSlashName + 1);
-                            if (foundMatch != NULL) {
-                                foundDuplicate = true;
-                            }
-                        }
-
-                        if (foundDuplicate == false) {
-                            // Add the new entry to the list.
-                            (void)snprintf(*reg_data + strlen(*reg_data), name_size + 2, "%c%s", PATH_SEPARATOR, name);
-                            found = true;
-                        } else {
-                            loader_log(
-                                inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0,
-                                "Skipping adding of json file \"%s\" from registry \"%s\\%s\" to the list due to duplication", name,
-                                hive == DEFAULT_VK_REGISTRY_HIVE ? DEFAULT_VK_REGISTRY_HIVE_STR : SECONDARY_VK_REGISTRY_HIVE_STR,
-                                location);
-                        }
+                    result = LoaderAddManifestSource(inst, name, name_size + 1, location, REG_SZ, LOADER_MANIFEST_SOURCE_REGISTRY, true, source_data);
+                    if (result != VK_SUCCESS) {
+                        goto out;
                     }
+                    found = true;
                 }
             }
             RegCloseKey(key);
@@ -1860,6 +1870,9 @@ bool loaderImplicitLayerIsEnabled(const struct loader_instance *inst, const stru
                 else if (prop->source.type == LOADER_MANIFEST_SOURCE_REGISTRY) {
                     loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because no enable environment variable is available. It may be disabled by setting the disable environment variable '%s'. This layer was located based upon its registry entry, which is at '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.type_info);
                 }
+                else if (prop->source.type == LOADER_MANIFEST_SOURCE_ADAPTER_INFO) {
+                    loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because no enable environment variable is available. It may be disabled by setting the disable environment variable '%s'. This layer was located by enumerating D3D adapters, and is located at '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.filename);
+                }
             }
         } else {
             // Otherwise, only enable this layer if the enable environment variable is defined
@@ -1871,7 +1884,10 @@ bool loaderImplicitLayerIsEnabled(const struct loader_instance *inst, const stru
                         loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because the enable environment variable has been set. It may be disabled by setting the disable environment variable '%s'. This layer was located based upon its manifest location, which is '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.filename);
                     }
                     else if (prop->source.type == LOADER_MANIFEST_SOURCE_REGISTRY) {
-                        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because no enable environment variable has been set. It may be disabled by setting the disable environment variable '%s'. This layer was located based upon its registry entry, which is at '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.type_info);
+                        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because the enable environment variable has been set. It may be disabled by setting the disable environment variable '%s'. This layer was located based upon its registry entry, which is at '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.type_info);
+                    }
+                    else if (prop->source.type == LOADER_MANIFEST_SOURCE_ADAPTER_INFO) {
+                        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Attempting to enable implicit layer '%s' because the enable environment variable has been set. It may be disabled by setting the disable environment variable '%s'. This layer was located by enumerating D3D adapters, and is located at '%s'", prop->info.layerName, prop->disable_env_var.name, prop->source.filename);
                     }
                 }
             }
@@ -3871,6 +3887,60 @@ out:
     return vk_result;
 }
 
+static void LoaderStripSource(const struct loader_instance *inst, struct loader_data_files *source_data, uint32_t index) {
+
+    if (source_data->source_list[index].filename != NULL) {
+        loader_instance_heap_free(inst, source_data->source_list[index].filename);
+    }
+    if (source_data->source_list[index].type_info != NULL) {
+        loader_instance_heap_free(inst, source_data->source_list[index].type_info);
+    }
+    memmove(source_data->source_list + index, source_data->source_list + index + 1, (source_data->count - index)*sizeof(*source_data->source_list));
+    --source_data->count;
+}
+
+static void LoaderStripInvalidSources(const struct loader_instance *inst, struct loader_data_files *source_data) {
+
+    char *cur_file;
+    char *name;
+    char full_path[2048];
+#ifndef _WIN32
+    char temp_path[2048];
+#endif
+
+    for (uint32_t i = 0; i < source_data->count; ++i) {
+        cur_file = source_data->source_list[i].filename;
+#ifdef _WIN32
+        name = cur_file;
+#else
+        // Only Linux has relative paths, make a copy of location so it isn't modified
+        size_t str_len;
+        if (NULL != next_file) {
+            str_len = next_file - cur_file + 1;
+        } else {
+            str_len = strlen(cur_file) + 1;
+        }
+        if (str_len > sizeof(temp_path)) {
+            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "LoaderStripInvalidSources: Path to %s too long\n", cur_file);
+            LoaderStripSource(inst, source_data, i--);
+            continue;
+        }
+        strcpy(temp_path, cur_file);
+        name = temp_path;
+#endif
+        loader_get_fullpath(cur_file, name, sizeof(full_path), full_path);
+        name = full_path;
+
+        // Remove anything that doesn't end with the ".json" suffix
+        size_t name_len = strlen(full_path);
+        const char *name_suffix = full_path + name_len - 5;
+        if ((name_len < 5) || 0 != strncmp(name_suffix, ".json", 5)) {
+            LoaderStripSource(inst, source_data, i--);
+            continue;
+        }
+    }
+}
+
 static VkResult AddDataFilesInPath(const struct loader_instance *inst, char *search_path, bool is_directory_list,
                                    struct loader_data_files *out_files, bool use_first_found_manifest) {
     VkResult vk_result = VK_SUCCESS;
@@ -4219,8 +4289,8 @@ out:
 
 #ifdef _WIN32
 // Read manifest JSON files using the Windows driver interface
-static VkResult ReadManifestsFromD3DAdapters(const struct loader_instance *inst, char **reg_data, PDWORD reg_data_size,
-                                             const wchar_t *value_name) {
+static VkResult ReadManifestsFromD3DAdapters(const struct loader_instance *inst, struct loader_data_files *source_data, const wchar_t *value_name) {
+
     VkResult result = VK_INCOMPLETE;
     LoaderEnumAdapters2 adapters = {.adapter_count = 0, .adapters = NULL};
     LoaderQueryRegistryInfo *full_info = NULL;
@@ -4322,9 +4392,7 @@ static VkResult ReadManifestsFromD3DAdapters(const struct loader_instance *inst,
             WideCharToMultiByte(CP_UTF8, 0, curr_path, -1, json_path, (int)json_path_size, NULL, NULL);
 
             // Add the string to the output list
-            result = VK_SUCCESS;
-            loaderAddJsonEntry(inst, reg_data, reg_data_size, (LPCTSTR)L"EnumAdapters", REG_SZ, json_path,
-                               (DWORD)strlen(json_path) + 1, &result);
+            result = LoaderAddManifestSource(inst, json_path, (DWORD)strlen(json_path) + 1, (LPCTSTR)L"EnumAdapters", REG_SZ, LOADER_MANIFEST_SOURCE_ADAPTER_INFO, false, source_data);
             if (result != VK_SUCCESS) {
                 goto out;
             }
@@ -4352,36 +4420,34 @@ out:
 
 // Look for data files in the registry.
 static VkResult ReadDataFilesInRegistry(const struct loader_instance *inst, enum loader_data_files_type data_file_type,
-                                        bool warn_if_not_present, char *registry_location, struct loader_data_files *out_files) {
+                                        bool warn_if_not_present, char *registry_location, struct loader_data_files *file_sources) {
     VkResult vk_result = VK_SUCCESS;
-    char *search_path = NULL;
 
     // These calls look at the PNP/Device section of the registry.
     VkResult regHKR_result = VK_SUCCESS;
-    DWORD reg_size = 4096;
     if (!strncmp(registry_location, VK_DRIVERS_INFO_REGISTRY_LOC, sizeof(VK_DRIVERS_INFO_REGISTRY_LOC))) {
         // If we're looking for drivers we need to try enumerating adapters
-        regHKR_result = ReadManifestsFromD3DAdapters(inst, &search_path, &reg_size, LoaderPnpDriverRegistryWide());
+        regHKR_result = ReadManifestsFromD3DAdapters(inst, file_sources, LoaderPnpDriverRegistryWide());
         if (regHKR_result == VK_INCOMPLETE) {
-            regHKR_result = loaderGetDeviceRegistryFiles(inst, &search_path, &reg_size, LoaderPnpDriverRegistry());
+            regHKR_result = loaderGetDeviceRegistryFiles(inst, file_sources, LoaderPnpDriverRegistry());
         }
     } else if (!strncmp(registry_location, VK_ELAYERS_INFO_REGISTRY_LOC, sizeof(VK_ELAYERS_INFO_REGISTRY_LOC))) {
-        regHKR_result = ReadManifestsFromD3DAdapters(inst, &search_path, &reg_size, LoaderPnpELayerRegistryWide());
+        regHKR_result = ReadManifestsFromD3DAdapters(inst, file_sources, LoaderPnpELayerRegistryWide());
         if (regHKR_result == VK_INCOMPLETE) {
-            regHKR_result = loaderGetDeviceRegistryFiles(inst, &search_path, &reg_size, LoaderPnpELayerRegistry());
+            regHKR_result = loaderGetDeviceRegistryFiles(inst, file_sources, LoaderPnpELayerRegistry());
         }
     } else if (!strncmp(registry_location, VK_ILAYERS_INFO_REGISTRY_LOC, sizeof(VK_ILAYERS_INFO_REGISTRY_LOC))) {
-        regHKR_result = ReadManifestsFromD3DAdapters(inst, &search_path, &reg_size, LoaderPnpILayerRegistryWide());
+        regHKR_result = ReadManifestsFromD3DAdapters(inst, file_sources, LoaderPnpILayerRegistryWide());
         if (regHKR_result == VK_INCOMPLETE) {
-            regHKR_result = loaderGetDeviceRegistryFiles(inst, &search_path, &reg_size, LoaderPnpILayerRegistry());
+            regHKR_result = loaderGetDeviceRegistryFiles(inst, file_sources, LoaderPnpILayerRegistry());
         }
     }
 
     // This call looks into the Khronos non-device specific section of the registry.
     bool use_secondary_hive = (data_file_type == LOADER_DATA_FILE_MANIFEST_LAYER) && (!IsHighIntegrity());
-    VkResult reg_result = loaderGetRegistryFiles(inst, registry_location, use_secondary_hive, &search_path, &reg_size);
+    VkResult reg_result = loaderGetRegistryFiles(inst, registry_location, use_secondary_hive, file_sources);
 
-    if ((VK_SUCCESS != reg_result && VK_SUCCESS != regHKR_result) || NULL == search_path) {
+    if ((VK_SUCCESS != reg_result && VK_SUCCESS != regHKR_result) || file_sources->count == 0) {
         if (data_file_type == LOADER_DATA_FILE_MANIFEST_ICD) {
             loader_log(
                 inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0,
@@ -4414,13 +4480,9 @@ static VkResult ReadDataFilesInRegistry(const struct loader_instance *inst, enum
     }
 
     // Now, parse the paths and add any manifest files found in them.
-    vk_result = AddDataFilesInPath(inst, search_path, false, out_files, false);
+    LoaderStripInvalidSources(inst, file_sources);
 
 out:
-
-    if (NULL != search_path) {
-        loader_instance_heap_free(inst, search_path);
-    }
 
     return vk_result;
 }

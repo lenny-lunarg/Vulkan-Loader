@@ -133,6 +133,7 @@ struct loader_override_expiration {
 enum loader_manifest_source_type {
     LOADER_MANIFEST_SOURCE_DIRECTORY,
     LOADER_MANIFEST_SOURCE_REGISTRY,
+    LOADER_MANIFEST_SOURCE_ADAPTER_INFO,
 };
 
 struct loader_manifest_source {
