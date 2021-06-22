@@ -555,14 +555,11 @@ VKAPI_ATTR VkResult VKAPI_CALL vkSetDeviceDispatch(VkDevice device, void *object
     return VK_SUCCESS;
 }
 
-#if defined(_WIN32)
-
-static VkResult LoaderAddManifestSource(const struct loader_instance *inst, const char* json_paths, DWORD json_paths_size, LPCSTR key_name, DWORD key_type, enum loader_manifest_source_type origin_type, bool remove_same_names, struct loader_data_files* source_data) {
+static VkResult AddManifestSource(const struct loader_instance *inst, const char* json_paths, uint32_t json_paths_size, const char *source_info, bool parse_multiple, enum loader_manifest_source_type origin_type, bool remove_same_names, struct loader_data_files* source_data) {
 
     for (const char *curr_filename = json_paths; curr_filename[0] != '\0'; curr_filename += strlen(curr_filename) + 1) {
 
         // Check if this full path is already present
-        bool found = false;
         for (uint32_t i = 0; i < source_data->count; ++i) {
             if (source_data->source_list[i].filename && strstr(source_data->source_list[i].filename, curr_filename)) {
                 return VK_SUCCESS;
@@ -608,17 +605,28 @@ static VkResult LoaderAddManifestSource(const struct loader_instance *inst, cons
             .type = origin_type,
             .type_info = NULL,
         };
-        loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "%s: Located json file \"%s\" from PnP registry: %s", __FUNCTION__,
-            curr_filename, key_name);
+        switch(origin_type) {
+        case LOADER_MANIFEST_SOURCE_DIRECTORY:
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' based upon installation location", curr_filename);
+            break;
+        case LOADER_MANIFEST_SOURCE_REGISTRY:
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' from registry '%s'", curr_filename, source_info);
+            break;
+        case LOADER_MANIFEST_SOURCE_ADAPTER_INFO:
+            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' from D3D adapter enumeration", curr_filename);
+            break;
+        };
 
         // Exit if this isn't a string list
-        if (key_type == REG_SZ) {
+        if (!parse_multiple) {
             break;
         }
     }
 
     return VK_SUCCESS;
 }
+
+#if defined(_WIN32)
 
 // Append the JSON path data to the list and allocate/grow the list if it's not large enough.
 // Function returns true if filename was appended to reg_data list.
@@ -753,7 +761,7 @@ bool loaderGetDeviceRegistryEntry(const struct loader_instance *inst, struct loa
         goto out;
     }
 
-    found = LoaderAddManifestSource(inst, manifest_path, requiredSize, value_name, data_type, LOADER_MANIFEST_SOURCE_REGISTRY, false, source_data);
+    found = AddManifestSource(inst, manifest_path, requiredSize, value_name, data_type == REG_MULT_SZ, LOADER_MANIFEST_SOURCE_REGISTRY, false, source_data);
 
 out:
     if (manifest_path != NULL) {
@@ -1045,7 +1053,7 @@ VkResult loaderGetRegistryFiles(const struct loader_instance *inst, char *locati
                         }
                     }
 
-                    result = LoaderAddManifestSource(inst, name, name_size + 1, location, REG_SZ, LOADER_MANIFEST_SOURCE_REGISTRY, true, source_data);
+                    result = AddManifestSource(inst, name, name_size + 1, location, false, LOADER_MANIFEST_SOURCE_REGISTRY, true, source_data);
                     if (result != VK_SUCCESS) {
                         goto out;
                     }
@@ -3843,51 +3851,7 @@ static inline VkResult CheckAndAdjustDataFileList(const struct loader_instance *
     return VK_SUCCESS;
 }
 
-// If the file found is a manifest file name, add it to the out_files manifest list.
-static VkResult AddIfManifestFile(const struct loader_instance *inst, const char *file_name, struct loader_data_files *out_files) {
-    VkResult vk_result = VK_SUCCESS;
-
-    if (NULL == file_name || NULL == out_files) {
-        loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0, "AddIfManfistFile: Received NULL pointer");
-        vk_result = VK_ERROR_INITIALIZATION_FAILED;
-        goto out;
-    }
-
-    // Look for files ending with ".json" suffix
-    size_t name_len = strlen(file_name);
-    const char *name_suffix = file_name + name_len - 5;
-    if ((name_len < 5) || 0 != strncmp(name_suffix, ".json", 5)) {
-        // Use incomplete to indicate invalid name, but to keep going.
-        vk_result = VK_INCOMPLETE;
-        goto out;
-    }
-
-    // Check and allocate space in the manifest list if necessary
-    vk_result = CheckAndAdjustDataFileList(inst, out_files);
-    if (VK_SUCCESS != vk_result) {
-        goto out;
-    }
-
-    out_files->source_list[out_files->count] = (struct loader_manifest_source) {
-        .filename = loader_instance_heap_alloc(inst, strlen(file_name) + 1, VK_SYSTEM_ALLOCATION_SCOPE_COMMAND),
-        .type = LOADER_MANIFEST_SOURCE_DIRECTORY,
-        .type_info = NULL,
-    };
-    if (out_files->source_list[out_files->count].filename == NULL) {
-        loader_log(inst, VK_DEBUG_REPORT_ERROR_BIT_EXT, 0, "AddIfManfistFile: Failed to allocate space for manifest source %d list",
-                   out_files->count);
-        vk_result = VK_ERROR_OUT_OF_HOST_MEMORY;
-        goto out;
-    }
-
-    strcpy(out_files->source_list[out_files->count++].filename, file_name);
-
-out:
-
-    return vk_result;
-}
-
-static void LoaderStripSource(const struct loader_instance *inst, struct loader_data_files *source_data, uint32_t index) {
+static void StripSource(const struct loader_instance *inst, struct loader_data_files *source_data, uint32_t index) {
 
     if (source_data->source_list[index].filename != NULL) {
         loader_instance_heap_free(inst, source_data->source_list[index].filename);
@@ -3899,7 +3863,7 @@ static void LoaderStripSource(const struct loader_instance *inst, struct loader_
     --source_data->count;
 }
 
-static void LoaderStripInvalidSources(const struct loader_instance *inst, struct loader_data_files *source_data) {
+static void StripInvalidSources(const struct loader_instance *inst, struct loader_data_files *source_data) {
 
     char *cur_file;
     char *name;
@@ -3914,15 +3878,10 @@ static void LoaderStripInvalidSources(const struct loader_instance *inst, struct
         name = cur_file;
 #else
         // Only Linux has relative paths, make a copy of location so it isn't modified
-        size_t str_len;
-        if (NULL != next_file) {
-            str_len = next_file - cur_file + 1;
-        } else {
-            str_len = strlen(cur_file) + 1;
-        }
+        size_t str_len = strlen(cur_file) + 1;
         if (str_len > sizeof(temp_path)) {
-            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "LoaderStripInvalidSources: Path to %s too long\n", cur_file);
-            LoaderStripSource(inst, source_data, i--);
+            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "StripInvalidSources: Path to %s too long\n", cur_file);
+            StripSource(inst, source_data, i--);
             continue;
         }
         strcpy(temp_path, cur_file);
@@ -3935,103 +3894,10 @@ static void LoaderStripInvalidSources(const struct loader_instance *inst, struct
         size_t name_len = strlen(full_path);
         const char *name_suffix = full_path + name_len - 5;
         if ((name_len < 5) || 0 != strncmp(name_suffix, ".json", 5)) {
-            LoaderStripSource(inst, source_data, i--);
+            StripSource(inst, source_data, i--);
             continue;
         }
     }
-}
-
-static VkResult AddDataFilesInPath(const struct loader_instance *inst, char *search_path, bool is_directory_list,
-                                   struct loader_data_files *out_files, bool use_first_found_manifest) {
-    VkResult vk_result = VK_SUCCESS;
-    DIR *dir_stream = NULL;
-    struct dirent *dir_entry;
-    char *cur_file;
-    char *next_file;
-    char *name;
-    char full_path[2048];
-#ifndef _WIN32
-    char temp_path[2048];
-#endif
-
-    // Now, parse the paths
-    next_file = search_path;
-    while (NULL != next_file && *next_file != '\0') {
-        name = NULL;
-        cur_file = next_file;
-        next_file = loader_get_next_path(cur_file);
-
-        // Get the next name in the list and verify it's valid
-        if (is_directory_list) {
-            dir_stream = opendir(cur_file);
-            if (NULL == dir_stream) {
-                continue;
-            }
-            while (1) {
-                dir_entry = readdir(dir_stream);
-                if (NULL == dir_entry) {
-                    break;
-                }
-
-                name = &(dir_entry->d_name[0]);
-                loader_get_fullpath(name, cur_file, sizeof(full_path), full_path);
-                name = full_path;
-
-                VkResult local_res;
-                local_res = AddIfManifestFile(inst, name, out_files);
-
-                // Incomplete means this was not a valid data file.
-                if (local_res == VK_INCOMPLETE) {
-                    continue;
-                } else if (local_res != VK_SUCCESS) {
-                    vk_result = local_res;
-                    break;
-                }
-            }
-            closedir(dir_stream);
-            if (vk_result != VK_SUCCESS) {
-                goto out;
-            }
-        } else {
-#ifdef _WIN32
-            name = cur_file;
-#else
-            // Only Linux has relative paths, make a copy of location so it isn't modified
-            size_t str_len;
-            if (NULL != next_file) {
-                str_len = next_file - cur_file + 1;
-            } else {
-                str_len = strlen(cur_file) + 1;
-            }
-            if (str_len > sizeof(temp_path)) {
-                loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "AddDataFilesInPath: Path to %s too long\n", cur_file);
-                continue;
-            }
-            strcpy(temp_path, cur_file);
-            name = temp_path;
-#endif
-            loader_get_fullpath(cur_file, name, sizeof(full_path), full_path);
-            name = full_path;
-
-            VkResult local_res;
-            local_res = AddIfManifestFile(inst, name, out_files);
-
-            // Incomplete means this was not a valid data file.
-            if (local_res == VK_INCOMPLETE) {
-                continue;
-            } else if (local_res != VK_SUCCESS) {
-                vk_result = local_res;
-                break;
-            }
-        }
-        if (use_first_found_manifest && out_files->count > 0) {
-            break;
-        }
-    }
-
-out:
-
-    return vk_result;
 }
 
 // Look for data files in the provided paths, but first check the environment override to determine if we should use that
@@ -4249,7 +4115,45 @@ static VkResult ReadDataFilesInSearchPaths(const struct loader_instance *inst, e
     }
 
     // Now, parse the paths and add any manifest files found in them.
-    vk_result = AddDataFilesInPath(inst, search_path, is_directory_list, out_files, use_first_found_manifest);
+    char *next_file = search_path;
+    DIR *dir_stream = NULL;
+    struct dirent *dir_entry;
+    char full_path[2048];
+    while (NULL != next_file && *next_file != '\0') {
+        char *name = NULL;
+        char *cur_file = next_file;
+        next_file = loader_get_next_path(cur_file);
+
+        // Get the next name in the list and verify it's valid
+        dir_stream = opendir(cur_file);
+        if (NULL == dir_stream) {
+            continue;
+        }
+        while (1) {
+            dir_entry = readdir(dir_stream);
+            if (NULL == dir_entry) {
+                break;
+            }
+
+            name = &(dir_entry->d_name[0]);
+            loader_get_fullpath(name, cur_file, sizeof(full_path), full_path);
+            name = full_path;
+
+            vk_result = AddManifestSource(inst, name, strlen(name) + 1, NULL, false, LOADER_MANIFEST_SOURCE_DIRECTORY, false, out_files);
+            if (vk_result != VK_SUCCESS) {
+                break;
+            }
+
+            if (use_first_found_manifest) {
+                break;
+            }
+        }
+        closedir(dir_stream);
+        if (vk_result != VK_SUCCESS) {
+            goto out;
+        }
+    }
+    StripInvalidSources(inst, out_files);
 
     if (NULL != override_path) {
         *override_active = true;
@@ -4392,7 +4296,7 @@ static VkResult ReadManifestsFromD3DAdapters(const struct loader_instance *inst,
             WideCharToMultiByte(CP_UTF8, 0, curr_path, -1, json_path, (int)json_path_size, NULL, NULL);
 
             // Add the string to the output list
-            result = LoaderAddManifestSource(inst, json_path, (DWORD)strlen(json_path) + 1, (LPCTSTR)L"EnumAdapters", REG_SZ, LOADER_MANIFEST_SOURCE_ADAPTER_INFO, false, source_data);
+            result = AddManifestSource(inst, json_path, (DWORD)strlen(json_path) + 1, NULL, false, LOADER_MANIFEST_SOURCE_ADAPTER_INFO, false, source_data);
             if (result != VK_SUCCESS) {
                 goto out;
             }
@@ -4480,7 +4384,7 @@ static VkResult ReadDataFilesInRegistry(const struct loader_instance *inst, enum
     }
 
     // Now, parse the paths and add any manifest files found in them.
-    LoaderStripInvalidSources(inst, file_sources);
+    StripInvalidSources(inst, file_sources);
 
 out:
 
