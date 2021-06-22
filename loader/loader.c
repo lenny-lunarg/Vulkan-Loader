@@ -607,13 +607,13 @@ static VkResult AddManifestSource(const struct loader_instance *inst, const char
         };
         switch(origin_type) {
         case LOADER_MANIFEST_SOURCE_DIRECTORY:
-            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' based upon installation location", curr_filename);
+            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "Located json file '%s' based upon installation location", curr_filename);
             break;
         case LOADER_MANIFEST_SOURCE_REGISTRY:
-            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' from registry '%s'", curr_filename, source_info);
+            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "Located json file '%s' from registry '%s'", curr_filename, source_info);
             break;
         case LOADER_MANIFEST_SOURCE_ADAPTER_INFO:
-            loader_log(inst, VK_DEBUG_REPORT_INFORMATION_BIT_EXT, 0, "Located json file '%s' from D3D adapter enumeration", curr_filename);
+            loader_log(inst, VK_DEBUG_REPORT_DEBUG_BIT_EXT, 0, "Located json file '%s' from D3D adapter enumeration", curr_filename);
             break;
         };
 
@@ -761,7 +761,7 @@ bool loaderGetDeviceRegistryEntry(const struct loader_instance *inst, struct loa
         goto out;
     }
 
-    found = AddManifestSource(inst, manifest_path, requiredSize, value_name, data_type == REG_MULT_SZ, LOADER_MANIFEST_SOURCE_REGISTRY, false, source_data);
+    found = AddManifestSource(inst, manifest_path, requiredSize, value_name, data_type == REG_MULTI_SZ, LOADER_MANIFEST_SOURCE_REGISTRY, false, source_data);
 
 out:
     if (manifest_path != NULL) {
@@ -4125,32 +4125,39 @@ static VkResult ReadDataFilesInSearchPaths(const struct loader_instance *inst, e
         next_file = loader_get_next_path(cur_file);
 
         // Get the next name in the list and verify it's valid
-        dir_stream = opendir(cur_file);
-        if (NULL == dir_stream) {
-            continue;
-        }
-        while (1) {
-            dir_entry = readdir(dir_stream);
-            if (NULL == dir_entry) {
-                break;
+        if (is_directory_list) {
+            dir_stream = opendir(cur_file);
+            if (NULL == dir_stream) {
+                continue;
             }
+            while (1) {
+                dir_entry = readdir(dir_stream);
+                if (NULL == dir_entry) {
+                    break;
+                }
 
-            name = &(dir_entry->d_name[0]);
-            loader_get_fullpath(name, cur_file, sizeof(full_path), full_path);
-            name = full_path;
+                name = &(dir_entry->d_name[0]);
+                loader_get_fullpath(name, cur_file, sizeof(full_path), full_path);
+                name = full_path;
 
-            vk_result = AddManifestSource(inst, name, strlen(name) + 1, NULL, false, LOADER_MANIFEST_SOURCE_DIRECTORY, false, out_files);
+                vk_result = AddManifestSource(inst, name, (uint32_t)strlen(name) + 1, NULL, false, LOADER_MANIFEST_SOURCE_DIRECTORY, false, out_files);
+                if (vk_result != VK_SUCCESS) {
+                    break;
+                }
+
+                if (use_first_found_manifest) {
+                    break;
+                }
+            }
+            closedir(dir_stream);
+            if (vk_result != VK_SUCCESS) {
+                goto out;
+            }
+        } else {
+            vk_result = AddManifestSource(inst, cur_file, (uint32_t)strlen(cur_file) + 1, NULL, false, LOADER_MANIFEST_SOURCE_DIRECTORY, false, out_files);
             if (vk_result != VK_SUCCESS) {
                 break;
             }
-
-            if (use_first_found_manifest) {
-                break;
-            }
-        }
-        closedir(dir_stream);
-        if (vk_result != VK_SUCCESS) {
-            goto out;
         }
     }
     StripInvalidSources(inst, out_files);
